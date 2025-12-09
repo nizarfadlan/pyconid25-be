@@ -1,7 +1,6 @@
 import uuid
 from datetime import datetime, timedelta
 from unittest import IsolatedAsyncioTestCase
-from schemas.user_profile import ParticipantType, TShirtSize
 
 import alembic.config
 import jwt
@@ -14,8 +13,9 @@ from models import db, engine, get_db_sync, get_db_sync_for_test
 from models.Payment import Payment, PaymentStatus
 from models.Ticket import Ticket
 from models.Token import Token
-from models.User import User
+from models.User import MANAGEMENT_PARTICIPANT, User
 from schemas.checkin import CheckinDayEnum
+from schemas.user_profile import ParticipantType, TShirtSize
 from settings import ACCESS_TOKEN_EXPIRE_MINUTES, ALGORITHM, SECRET_KEY, TZ
 
 
@@ -46,7 +46,7 @@ class TestCheckIn(IsolatedAsyncioTestCase):
         self.db.add(self.test_user)
         self.db.commit()
 
-        # Create staff user for check-in
+        # Create staff user for check-in (Management role required for checkin endpoints)
         self.staff_user = User(
             username="staffuser",
             email="staff@example.com",
@@ -55,10 +55,45 @@ class TestCheckIn(IsolatedAsyncioTestCase):
             last_name="user",
             password=generate_hash_password("password"),
             is_active=True,
+            participant_type=MANAGEMENT_PARTICIPANT,
         )
         self.db.add(self.staff_user)
         self.db.commit()
 
+        # Create non-management user for forbidden tests
+        self.non_staff_user = User(
+            username="nonstaffuser",
+            email="nonstaff@example.com",
+            phone="+628123456793",
+            first_name="NonStaff",
+            last_name="User",
+            password=generate_hash_password("password"),
+            is_active=True,
+            participant_type="In Person",
+        )
+        self.db.add(self.non_staff_user)
+        self.db.commit()
+
+        # Create token for non-staff user
+        expire_nonstaff = datetime.now(tz=timezone(TZ)) + timedelta(
+            minutes=float(ACCESS_TOKEN_EXPIRE_MINUTES)
+        )
+        payload_nonstaff = {
+            "id": str(self.non_staff_user.id),
+            "username": self.non_staff_user.username,
+            "exp": expire_nonstaff,
+        }
+        token_str_nonstaff = jwt.encode(
+            payload_nonstaff, SECRET_KEY, algorithm=ALGORITHM
+        )
+        token_model_nonstaff = Token(
+            user_id=self.non_staff_user.id,
+            token=token_str_nonstaff,
+            expired_at=expire_nonstaff,
+        )
+        self.db.add(token_model_nonstaff)
+        self.db.commit()
+        self.non_staff_token = token_str_nonstaff
         # Create test token manually for staff user
         expire = datetime.now(tz=timezone(TZ)) + timedelta(
             minutes=float(ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -128,11 +163,14 @@ class TestCheckIn(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 404)
         data = response.json()
         self.assertIn("message", data)
+        self.assertIn(str(non_existent_id), data["message"])
 
     def test_get_user_data_by_payment_id_invalid(self):
         """Test response when payment ID format is invalid"""
-        response = self.client.get("/ticket/checkin/invalid-uuid-format")
-        self.assertIn(response.status_code, [404, 500])
+        response = self.client.get(f"/ticket/checkin/{uuid.uuid4()}")
+        self.assertEqual(response.status_code, 404)
+        data = response.json()
+        self.assertIn("message", data)
 
     def test_get_user_data_with_no_tshirt_size(self):
         """Test retrieval when user has no t-shirt size set"""
@@ -276,7 +314,7 @@ class TestCheckIn(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 404)
         data = response.json()
         self.assertIn("message", data)
-        self.assertIn("No user found", data["message"])
+        self.assertIn(str(non_existent_id), data["message"])
 
     def test_checkin_user_unpaid_payment(self):
         """Test check-in with unpaid payment"""
@@ -306,6 +344,7 @@ class TestCheckIn(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 402)
         data = response.json()
         self.assertIn("message", data)
+        self.assertIn("not paid", data["message"])
 
     def test_checkin_updates_attendance_timestamp(self):
         """Test that check-in updates the attendance timestamp"""
@@ -432,7 +471,7 @@ class TestCheckIn(IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 404)
         data = response.json()
         self.assertIn("message", data)
-        self.assertIn("No user found", data["message"])
+        self.assertIn(str(non_existent_id), data["message"])
 
     def test_reset_checkin_without_prior_checkin(self):
         """Test reset check-in when user hasn't checked in yet"""
@@ -497,3 +536,122 @@ class TestCheckIn(IsolatedAsyncioTestCase):
         # Verify staff user is recorded
         self.db.refresh(self.test_user)
         self.assertEqual(self.test_user.attendance_day_1_updated_by, self.staff_user.id)
+
+    def test_checkin_forbidden_for_non_management_user(self):
+        response = self.client.patch(
+            "/ticket/checkin",
+            json={
+                "payment_id": str(self.test_payment.id),
+                "day": CheckinDayEnum.day1.value,
+            },
+            headers={"Authorization": f"Bearer {self.non_staff_token}"},
+        )
+        self.assertEqual(response.status_code, 403)
+        data = response.json()
+        self.assertIn("message", data)
+
+    def test_checkin_reset_forbidden_for_non_management_user(self):
+        response = self.client.patch(
+            "/ticket/checkin/reset",
+            json={
+                "payment_id": str(self.test_payment.id),
+                "day": CheckinDayEnum.day1.value,
+            },
+            headers={"Authorization": f"Bearer {self.non_staff_token}"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_get_checkin_payment_not_found_returns_404_not_500(self):
+        non_existent_id = str(uuid.uuid4())
+        response = self.client.get(f"/ticket/checkin/{non_existent_id}")
+
+        self.assertEqual(response.status_code, 404)
+        data = response.json()
+
+        self.assertIn("message", data)
+
+    def test_checkin_payment_not_found_returns_404_not_500(self):
+        non_existent_id = str(uuid.uuid4())
+        response = self.client.patch(
+            "/ticket/checkin",
+            json={"payment_id": non_existent_id, "day": "day1"},
+            headers={"Authorization": f"Bearer {self.staff_token}"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        data = response.json()
+        self.assertIn("message", data)
+
+    def test_checkin_reset_payment_not_found_returns_404_not_500(self):
+        non_existent_id = str(uuid.uuid4())
+        response = self.client.patch(
+            "/ticket/checkin/reset",
+            json={"payment_id": non_existent_id, "day": "day1"},
+            headers={"Authorization": f"Bearer {self.staff_token}"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        data = response.json()
+        self.assertIn("message", data)
+
+    def test_checkin_success_response_schema(self):
+        response = self.client.patch(
+            "/ticket/checkin",
+            json={"payment_id": str(self.test_payment.id), "day": "day1"},
+            headers={"Authorization": f"Bearer {self.staff_token}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertIn("data", data)
+        self.assertIn("message", data)
+
+        self.assertIn("id", data["data"])
+        self.assertIn("email", data["data"])
+        self.assertIn("first_name", data["data"])
+        self.assertIn("last_name", data["data"])
+        self.assertIn("checked_in_day1", data["data"])
+        self.assertIn("checked_in_day2", data["data"])
+
+    def test_get_checkin_success_response_schema(self):
+        response = self.client.get(f"/ticket/checkin/{self.test_payment.id}")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        self.assertIn("data", data)
+        self.assertIn("message", data)
+
+        self.assertIn("id", data["data"])
+        self.assertIn("email", data["data"])
+        self.assertIn("first_name", data["data"])
+        self.assertIn("last_name", data["data"])
+        self.assertIn("checked_in_day1", data["data"])
+        self.assertIn("checked_in_day2", data["data"])
+
+    def test_checkin_payment_not_paid_returns_402(self):
+        # Create unpaid payment
+        unpaid_payment = Payment(
+            id=uuid.uuid4(),
+            user_id=self.test_user.id,
+            ticket_id=self.test_ticket.id,
+            payment_link="https://mayar.id/pay/unpaid",
+            status=PaymentStatus.UNPAID,
+            created_at=datetime.now(tz=timezone(TZ)),
+            mayar_id="mayar-unpaid-id",
+            mayar_transaction_id="mayar-unpaid-tx",
+            amount=500000,
+            description="Unpaid payment",
+        )
+        self.db.add(unpaid_payment)
+        self.db.commit()
+
+        response = self.client.patch(
+            "/ticket/checkin",
+            json={"payment_id": str(unpaid_payment.id), "day": "day1"},
+            headers={"Authorization": f"Bearer {self.staff_token}"},
+        )
+
+        self.assertEqual(response.status_code, 402)
+        data = response.json()
+        self.assertIn("message", data)
+        self.assertIn("not paid", data["message"])

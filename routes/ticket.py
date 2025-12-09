@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from core.log import logger
 from core.responses import (
+    Forbidden,
     InternalServerError,
     NotFound,
     Ok,
@@ -16,6 +17,7 @@ from core.responses import (
 from core.security import get_user_from_token, oauth2_scheme
 from models import get_db_sync
 from models.Payment import PaymentStatus
+from models.User import MANAGEMENT_PARTICIPANT
 from repository import payment as paymentRepo
 from repository.checkin import (
     get_user_and_payment_by_payment_id,
@@ -212,18 +214,23 @@ async def checkin_user(
             logger.error("Unauthorized check-in attempt")
             return common_response(Unauthorized(message="Unauthorized"))
 
-        user_and_payment = get_user_and_payment_by_payment_id(db, payload.payment_id)
-        if user_and_payment is None:
+        if checkin_staff_user.participant_type != MANAGEMENT_PARTICIPANT:
+            return common_response(Forbidden())
+
+        payment = get_user_and_payment_by_payment_id(db, payload.payment_id)
+        if payment is None:
             return common_response(
                 NotFound(message=f"No user found for payment ID: {payload.payment_id}")
             )
-        user, payment = user_and_payment
+
+        user = payment.user
         if payment.status != PaymentStatus.PAID:
             return common_response(
                 PaymentRequired(
                     detail=f"Payment with ID {payload.payment_id} is not paid yet."
                 )
             )
+
         checkin_status = True
         updated_user = set_user_checkin_status(
             db=db,
@@ -278,6 +285,9 @@ async def checkin_user_reset(
         if checkin_staff_user is None:
             logger.error("Unauthorized check-in reset attempt")
             return common_response(Unauthorized(message="Unauthorized"))
+
+        if checkin_staff_user.participant_type != MANAGEMENT_PARTICIPANT:
+            return common_response(Forbidden())
 
         user = get_user_data_by_payment_id(db, payload.payment_id)
         if user is None:

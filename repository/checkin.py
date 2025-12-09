@@ -1,8 +1,9 @@
 import datetime
+from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import select, join
+from sqlalchemy.orm import Session, joinedload
 from core.log import logger
 
 from models.Payment import Payment
@@ -31,7 +32,7 @@ def get_user_data_by_payment_id(db: Session, payment_id: str) -> User | None:
 
 def get_user_and_payment_by_payment_id(
     db: Session, payment_id: str
-) -> tuple[User, Payment] | None:
+) -> Optional[Payment]:
     """Find user and payment data by Payment ID
 
     Args:
@@ -39,18 +40,16 @@ def get_user_and_payment_by_payment_id(
         payment_id (str): Payment ID
 
     Returns:
-        tuple[User, Payment] | None: Tuple of (User, Payment) or None if not found
+        Payment | None: Payment data or None if not found
     """
     query = (
-        select(User, Payment)
-        .join(Payment, Payment.user_id == User.id)
+        select(Payment)
+        .options(joinedload(Payment.user))
         .where(Payment.id == payment_id)
     )
-    result = db.execute(query).first()
-    if not result:
-        return None
-    user, payment = result
-    return (user, payment)
+
+    result = db.execute(query).scalar_one_or_none()
+    return result
 
 
 def set_user_checkin_status(

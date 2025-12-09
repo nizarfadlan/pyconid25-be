@@ -1,12 +1,14 @@
-from typing import Optional
 from enum import Enum
-from core.log import logger
+from typing import Optional
+
 from pydantic import BaseModel, EmailStr, Field
-from schemas.user_profile import ParticipantType, TShirtSize
+
+from core.log import logger
 from models.User import User
+from schemas.user_profile import ParticipantType, TShirtSize
 
 
-class CheckinUserResponse(BaseModel):
+class CheckinUser(BaseModel):
     id: str = Field(..., description="User ID")
     email: Optional[EmailStr] = None
     first_name: Optional[str] = None
@@ -17,7 +19,12 @@ class CheckinUserResponse(BaseModel):
     checked_in_day2: bool = False
 
 
-def user_model_to_checkin_response(user: User) -> CheckinUserResponse:
+class CheckinUserResponse(BaseModel):
+    data: CheckinUser
+    message: str
+
+
+def user_model_to_checkin_response(user: User) -> CheckinUser:
     """Convert User model to CheckinUserResponse schema
 
     Args:
@@ -36,7 +43,7 @@ def user_model_to_checkin_response(user: User) -> CheckinUserResponse:
     except ValueError as e:
         logger.error(f"Invalid enum value in user model: {e}")
 
-    return CheckinUserResponse(
+    return CheckinUser(
         id=str(user.id),
         email=user.email,
         first_name=user.first_name,
