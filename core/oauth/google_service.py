@@ -51,11 +51,21 @@ class OAuthGoogleService(BaseOAuthService):
             )
 
         user_data = user_response.json()
+        provider_id = user_data.get("sub") or user_data.get("id")
+        email = user_data.get("email")
+        email_verified = user_data.get("email_verified") is True or user_data.get("verified_email") is True
+
+        if not provider_id:
+            raise HTTPException(status_code=400, detail="Missing Google user identifier")
+        if not email:
+            raise HTTPException(status_code=400, detail="Missing Google email")
+        if not email_verified:
+            raise HTTPException(status_code=400, detail="Google email is not verified")
 
         return UserInfoResponse(
-            id=str(user_data.get("sub") or user_data.get("id")),
-            username=user_data.get("email"),
-            email=user_data.get("email"),
+            id=str(provider_id),
+            username=email,
+            email=email,
             name=user_data.get("name"),
         )
 
@@ -66,13 +76,26 @@ class OAuthGoogleService(BaseOAuthService):
     def _update_user_provider_info(
         self, user: User, user_info: UserInfoResponse
     ) -> User:
+        provider_id = user_info.get("id")
+        if user.google_id and user.google_id != provider_id:
+            raise HTTPException(
+                status_code=400, detail="Google account already linked to this user"
+            )
+
+        user.google_id = provider_id
         user.google_email = user_info.get("email")
+        if user_info.get("email") and not user.email:
+            user.email = user_info.get("email")
         return user
 
     def _set_user_provider_fields(
         self, user_data: dict, user_info: UserInfoResponse, provider_id: str
     ) -> dict:
         user_data.update(
-            {"google_id": provider_id, "google_email": user_info.get("email")}
+            {
+                "google_id": provider_id,
+                "google_email": user_info.get("email"),
+                "email": user_info.get("email"),
+            }
         )
         return user_data

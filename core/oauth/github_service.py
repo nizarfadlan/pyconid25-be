@@ -57,7 +57,7 @@ class OAuthGithubService(BaseOAuthService):
             elif email.get("verified") and not verified_email:
                 verified_email = email.get("email")
 
-        final_email = primary_email or verified_email or user_data.get("email")
+        final_email = primary_email or verified_email
 
         return UserInfoResponse(
             id=str(user_data.get("id")),
@@ -73,7 +73,16 @@ class OAuthGithubService(BaseOAuthService):
     def _update_user_provider_info(
         self, user: User, user_info: UserInfoResponse
     ) -> User:
+        provider_id = user_info.get("id")
+        if user.github_id and user.github_id != provider_id:
+            raise HTTPException(
+                status_code=400, detail="GitHub account already linked to this user"
+            )
+
+        user.github_id = provider_id
         user.github_username = user_info.get("username")
+        if user_info.get("email") and not user.email:
+            user.email = user_info.get("email")
         return user
 
     def _set_user_provider_fields(

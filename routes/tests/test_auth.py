@@ -26,6 +26,7 @@ def create_test_oauth_state(redirect_uri=None, provider="github"):
 
     payload = {
         "redirect_uri": redirect_uri,
+        "provider": provider,
         "nonce": secrets.token_urlsafe(16),
         "exp": datetime.now(tz=pytz.timezone("UTC")) + timedelta(minutes=10),
         "iat": datetime.now(tz=pytz.timezone("UTC")),
@@ -194,6 +195,7 @@ class TestAuth(IsolatedAsyncioTestCase):
             self.assertTrue(created_user.is_active)
             self.assertEqual(created_user.github_username, "testuser")
             self.assertEqual(created_user.github_id, "12345")
+            self.assertEqual(created_user.email, "test@example.com")
 
     async def test_github_oauth_verified_endpoint_existing_user(self):
         existing_user = User(
@@ -253,8 +255,6 @@ class TestAuth(IsolatedAsyncioTestCase):
             response = client.post(
                 f"/auth/github/verified/?code=auth_code&state={valid_state}"
             )
-            print(response.json())
-
             self.assertEqual(response.status_code, 200)
             data = response.json()
 
@@ -416,6 +416,7 @@ class TestAuth(IsolatedAsyncioTestCase):
             self.assertTrue(created_user.is_active)
             self.assertEqual(created_user.google_email, "testuser@gmail.com")
             self.assertEqual(created_user.google_id, "67890")
+            self.assertEqual(created_user.email, "testuser@gmail.com")
 
     async def test_google_oauth_verified_endpoint_existing_user(self):
         existing_user = User(
@@ -625,6 +626,886 @@ class TestAuth(IsolatedAsyncioTestCase):
             created_user = self.db.execute(stmt).scalar()
             self.assertIsNotNone(created_user)
             self.assertEqual(created_user.google_id, "11111")
+
+    async def test_github_oauth_links_existing_user_by_email_not_username(self):
+        existing_user = User(
+            username="customgithubuser",
+            email="link.github@example.com",
+            password=generate_hash_password("password"),
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": 24680,
+            "login": "linkedgithub",
+            "email": None,
+            "name": "Linked Github",
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = [
+            {"email": "link.github@example.com", "primary": True, "verified": True}
+        ]
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", True
+        ):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["id"], str(existing_user.id))
+            self.assertEqual(data["username"], "customgithubuser")
+            self.assertFalse(data["is_new_user"])
+
+            self.db.refresh(existing_user)
+            self.assertEqual(existing_user.github_id, "24680")
+            self.assertEqual(existing_user.github_username, "linkedgithub")
+            self.assertEqual(existing_user.email, "link.github@example.com")
+
+    async def test_google_oauth_links_existing_user_by_email_not_username(self):
+        existing_user = User(
+            username="customgoogleuser",
+            email="link.google@example.com",
+            password=generate_hash_password("password"),
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "google_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "sub": "13579",
+            "email": "link.google@example.com",
+            "name": "Linked Google",
+            "email_verified": True,
+        }
+
+        async def mock_get(url, token=None):
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.google = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="google")
+
+        with patch.object(google_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", True
+        ):
+            response = client.post(
+                f"/auth/google/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["id"], str(existing_user.id))
+            self.assertEqual(data["username"], "customgoogleuser")
+            self.assertFalse(data["is_new_user"])
+
+            self.db.refresh(existing_user)
+            self.assertEqual(existing_user.google_id, "13579")
+            self.assertEqual(existing_user.google_email, "link.google@example.com")
+            self.assertEqual(existing_user.email, "link.google@example.com")
+
+    async def test_github_oauth_rejects_inactive_existing_user(self):
+        existing_user = User(
+            username="inactivegithub",
+            github_id="inactive-github-id",
+            github_username="inactivegithub",
+            is_active=False,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": "inactive-github-id",
+            "login": "inactivegithub",
+            "email": None,
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = []
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()["message"], "Invalid Credentials")
+
+    async def test_google_oauth_rejects_inactive_existing_user(self):
+        existing_user = User(
+            username="inactivegoogle",
+            google_id="inactive-google-id",
+            google_email="inactive.google@example.com",
+            is_active=False,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "google_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "sub": "inactive-google-id",
+            "email": "inactive.google@example.com",
+            "email_verified": True,
+        }
+
+        async def mock_get(url, token=None):
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.google = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="google")
+
+        with patch.object(google_service, "oauth", mock_oauth):
+            response = client.post(
+                f"/auth/google/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()["message"], "Invalid Credentials")
+
+    async def test_google_oauth_rejects_unverified_email(self):
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "google_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "sub": "unverified-google-id",
+            "email": "unverified.google@example.com",
+            "email_verified": False,
+        }
+
+        async def mock_get(url, token=None):
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.google = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="google")
+
+        with patch.object(google_service, "oauth", mock_oauth):
+            response = client.post(
+                f"/auth/google/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("Google email is not verified", str(response.json()["message"]))
+
+    async def test_google_oauth_rejects_missing_email(self):
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "google_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "sub": "missing-email-google-id",
+            "email_verified": True,
+        }
+
+        async def mock_get(url, token=None):
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.google = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="google")
+
+        with patch.object(google_service, "oauth", mock_oauth):
+            response = client.post(
+                f"/auth/google/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("Missing Google email", str(response.json()["message"]))
+
+    async def test_github_oauth_rejects_new_user_without_verified_email(self):
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": 112233,
+            "login": "noemailgithub",
+            "email": "public-but-not-verified@example.com",
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = [
+            {"email": "noemail@example.com", "primary": True, "verified": False}
+        ]
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("No verified Github email available", str(response.json()["message"]))
+
+            stmt = select(User).where(User.github_id == "112233")
+            created_user = self.db.execute(stmt).scalar()
+            self.assertIsNone(created_user)
+
+    async def test_github_oauth_allows_existing_provider_user_without_email(self):
+        existing_user = User(
+            username="existingnoemailgithub",
+            github_id="445566",
+            github_username="existingnoemailgithub",
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": 445566,
+            "login": "existingnoemailgithub",
+            "email": None,
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = []
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["id"], str(existing_user.id))
+
+    async def test_github_oauth_rejects_provider_id_conflict_on_email_match(self):
+        existing_user = User(
+            username="conflictuser",
+            email="conflict.github@example.com",
+            github_id="old-github-id",
+            github_username="oldgithub",
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_access_token_123", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": "new-github-id",
+            "login": "newgithub",
+            "email": None,
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = [
+            {"email": "conflict.github@example.com", "primary": True, "verified": True}
+        ]
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", True
+        ):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn(
+                "GitHub account already linked to this user",
+                str(response.json()["message"]),
+            )
+
+    async def test_github_oauth_verified_missing_state(self):
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        response = client.post("/auth/github/verified/?code=auth_code")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["message"], "State not found")
+
+    async def test_github_oauth_auto_link_enabled_links_by_email(self):
+        existing_user = User(
+            username="autolinkgh",
+            email="autolink.gh@example.com",
+            password=generate_hash_password("password"),
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_token", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": 77777,
+            "login": "autolinkgh",
+            "email": None,
+            "name": "Auto Link GH",
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = [
+            {"email": "autolink.gh@example.com", "primary": True, "verified": True}
+        ]
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", True
+        ):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["id"], str(existing_user.id))
+            self.assertFalse(data["is_new_user"])
+
+            self.db.refresh(existing_user)
+            self.assertEqual(existing_user.github_id, "77777")
+
+    async def test_github_oauth_auto_link_disabled_rejects_email_match(self):
+        existing_user = User(
+            username="noautolinkgh",
+            email="noautolink.gh@example.com",
+            password=generate_hash_password("password"),
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_token", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": 88888,
+            "login": "noautolinkgh",
+            "email": None,
+            "name": "No Auto Link GH",
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = [
+            {"email": "noautolink.gh@example.com", "primary": True, "verified": True}
+        ]
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", False
+        ):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn(
+                "Email already registered",
+                str(response.json()["message"]),
+            )
+
+    async def test_google_oauth_auto_link_enabled_links_by_email(self):
+        existing_user = User(
+            username="autolinkgoogle",
+            email="autolink.google@example.com",
+            password=generate_hash_password("password"),
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "google_token", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "sub": "99999",
+            "email": "autolink.google@example.com",
+            "name": "Auto Link Google",
+            "email_verified": True,
+        }
+
+        async def mock_get(url, token=None):
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.google = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="google")
+
+        with patch.object(google_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", True
+        ):
+            response = client.post(
+                f"/auth/google/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertEqual(data["id"], str(existing_user.id))
+            self.assertFalse(data["is_new_user"])
+
+            self.db.refresh(existing_user)
+            self.assertEqual(existing_user.google_id, "99999")
+
+    async def test_google_oauth_auto_link_disabled_rejects_email_match(self):
+        existing_user = User(
+            username="noautolinkgoogle",
+            email="noautolink.google@example.com",
+            password=generate_hash_password("password"),
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "google_token", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "sub": "101010",
+            "email": "noautolink.google@example.com",
+            "name": "No Auto Link Google",
+            "email_verified": True,
+        }
+
+        async def mock_get(url, token=None):
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.google = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="google")
+
+        with patch.object(google_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", False
+        ):
+            response = client.post(
+                f"/auth/google/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn(
+                "Email already registered",
+                str(response.json()["message"]),
+            )
+
+    async def test_github_oauth_provider_id_bypasses_auto_link_disabled(self):
+        existing_user = User(
+            username="bypassgh",
+            github_id="111111",
+            github_username="bypassgh",
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_token", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": 111111,
+            "login": "bypassgh",
+            "email": None,
+            "name": "Bypass GH",
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = []
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", False
+        ):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["id"], str(existing_user.id))
+
+    async def test_google_oauth_provider_id_bypasses_auto_link_disabled(self):
+        existing_user = User(
+            username="bypassgoogle",
+            google_id="222222",
+            google_email="bypass.google@example.com",
+            is_active=True,
+        )
+        self.db.add(existing_user)
+        self.db.commit()
+
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "google_token", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "sub": "222222",
+            "email": "bypass.google@example.com",
+            "name": "Bypass Google",
+            "email_verified": True,
+        }
+
+        async def mock_get(url, token=None):
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.google = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="google")
+
+        with patch.object(google_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", False
+        ):
+            response = client.post(
+                f"/auth/google/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["id"], str(existing_user.id))
+
+    async def test_github_oauth_auto_link_disabled_creates_new_user(self):
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "github_token", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "id": 333333,
+            "login": "newusergithub",
+            "email": None,
+            "name": "New User GH",
+        }
+
+        mock_emails_response = MagicMock()
+        mock_emails_response.status_code = 200
+        mock_emails_response.json.return_value = [
+            {"email": "new.user.gh@example.com", "primary": True, "verified": True}
+        ]
+
+        async def mock_get(url, token=None):
+            if "user/emails" in url:
+                return mock_emails_response
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.github = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="github")
+
+        with patch.object(github_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", False
+        ):
+            response = client.post(
+                f"/auth/github/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertTrue(data["is_new_user"])
+            self.assertEqual(data["username"], "new.user.gh@example.com")
+
+            stmt = select(User).where(User.github_id == "333333")
+            created_user = self.db.execute(stmt).scalar()
+            self.assertIsNotNone(created_user)
+            self.assertEqual(created_user.email, "new.user.gh@example.com")
+
+    async def test_google_oauth_auto_link_disabled_creates_new_user(self):
+        app.dependency_overrides[get_db_sync] = get_db_sync_for_test(db=self.db)
+        client = TestClient(app)
+
+        mock_oauth_client = MagicMock()
+
+        async def mock_fetch_access_token(code, redirect_uri=None):
+            return {"access_token": "google_token", "token_type": "bearer"}
+
+        mock_oauth_client.fetch_access_token = mock_fetch_access_token
+
+        mock_user_response = MagicMock()
+        mock_user_response.status_code = 200
+        mock_user_response.json.return_value = {
+            "sub": "444444",
+            "email": "new.user.google@example.com",
+            "name": "New User Google",
+            "email_verified": True,
+        }
+
+        async def mock_get(url, token=None):
+            return mock_user_response
+
+        mock_oauth_client.get = mock_get
+
+        mock_oauth = MagicMock()
+        mock_oauth.google = mock_oauth_client
+        valid_state = create_test_oauth_state(provider="google")
+
+        with patch.object(google_service, "oauth", mock_oauth), patch(
+            "core.oauth.base.OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", False
+        ):
+            response = client.post(
+                f"/auth/google/verified/?code=auth_code&state={valid_state}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertTrue(data["is_new_user"])
+            self.assertEqual(data["username"], "new.user.google@example.com")
+
+            stmt = select(User).where(User.google_id == "444444")
+            created_user = self.db.execute(stmt).scalar()
+            self.assertIsNotNone(created_user)
+            self.assertEqual(created_user.email, "new.user.google@example.com")
 
     def tearDown(self):
         self.db.close()

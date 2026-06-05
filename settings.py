@@ -54,6 +54,10 @@ GITHUB_CLIENT_SECRET = os.environ.get("GITHUB_CLIENT_SECRET")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 
+OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL = str_to_bool(
+    os.environ.get("OAUTH_AUTO_LINK_BY_VERIFIED_EMAIL", "False")
+)
+
 # MAIL conf
 MAIL_DYNAMIC = str_to_bool(os.environ.get("MAIL_DYNAMIC", "False"))
 MAIL_USERNAME = os.environ.get("MAIL_USERNAME", "")

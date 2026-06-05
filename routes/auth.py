@@ -385,10 +385,16 @@ async def github_verified(
     try:
         if not code:
             return common_response(BadRequest(message="Code not found"))
+        if not state:
+            return common_response(BadRequest(message="State not found"))
 
-        oauth_result = await github_service.handle_verified(request=http_request, db=db)
+        oauth_result = await github_service.handle_verified(
+            request=http_request, db=db, code=code, state=state
+        )
 
         user = oauth_result["user"]
+        if not user.is_active:
+            return common_response(BadRequest(message="Invalid Credentials"))
         is_new_user = oauth_result["is_new_user"]
         provider_user_info = oauth_result["provider_user_info"]
 
@@ -463,10 +469,16 @@ async def google_verified(
     try:
         if not code:
             return common_response(BadRequest(message="Code not found"))
+        if not state:
+            return common_response(BadRequest(message="State not found"))
 
-        oauth_result = await google_service.handle_verified(request=http_request, db=db)
+        oauth_result = await google_service.handle_verified(
+            request=http_request, db=db, code=code, state=state
+        )
 
         user = oauth_result["user"]
+        if not user.is_active:
+            return common_response(BadRequest(message="Invalid Credentials"))
         is_new_user = oauth_result["is_new_user"]
         provider_user_info = oauth_result["provider_user_info"]
 
