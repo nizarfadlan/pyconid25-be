@@ -20,6 +20,7 @@ from core.responses import (
 from core.security import get_user_from_token, oauth2_scheme
 from models import get_db_sync
 from models.Stream import StreamStatus
+from models.StreamWatchSession import StreamWatchSession
 from models.User import MANAGEMENT_PARTICIPANT
 from repository import (
     room as roomRepo,
@@ -433,7 +434,6 @@ async def recreate_stream(
                 )
 
             old_mux_stream_id = stream_asset.mux_live_stream_id
-            streamingRepo.delete_stream(db, stream_asset)
 
         # Create new Mux stream
         (
@@ -443,7 +443,7 @@ async def recreate_stream(
         ) = mux_service.create_live_stream(is_public=True)
 
         # Create stream asset linked to this schedule
-        streamingRepo.create_stream(
+        new_stream = streamingRepo.create_stream(
             db=db,
             is_public=True,
             schedule_id=schedule.id,
@@ -452,6 +452,16 @@ async def recreate_stream(
             mux_stream_key=stream_key,
             status=StreamStatus.PENDING,
         )
+
+        if stream_asset is not None:
+            db.query(StreamWatchSession).filter(
+                StreamWatchSession.stream_id == stream_asset.id
+            ).update(
+                {StreamWatchSession.stream_id: new_stream.id},
+                synchronize_session=False,
+            )
+            db.commit()
+            streamingRepo.delete_stream(db, stream_asset)
 
         if old_mux_stream_id is not None:
             try:
