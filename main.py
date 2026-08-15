@@ -13,10 +13,14 @@ from core.rate_limiter.memory import InMemoryRateLimiter
 from core.rate_limiter.middleware import RateLimitMiddleware
 
 from settings import (
+    CORS_ALLOW_ALL_ORIGINS,
     RATE_LIMIT_ENABLED,
     RATE_LIMIT_EXCLUDED_PATHS,
     RATE_LIMIT_PER_MINUTE,
     RATE_LIMIT_WINDOW,
+    CORS_ALLOWED_ORIGINS,
+    REGISTRATION_CLOSED_MESSAGE,
+    REGISTRATION_ENABLED,
 )
 
 from core.telemetry import setup_telemetry
@@ -27,6 +31,25 @@ health_check()
 
 
 app = FastAPI(title="PyconId 2025 BE")
+
+
+REGISTRATION_PATHS = frozenset(
+    {
+        "/auth/email/signup",
+    }
+)
+
+
+@app.middleware("http")
+async def registration_closed_middleware(request: Request, call_next):
+    """Reject registration entry points before validation, DB, or OAuth work."""
+    if not REGISTRATION_ENABLED and request.url.path.rstrip("/") in REGISTRATION_PATHS:
+        return JSONResponse(
+            status_code=403,
+            content={"message": REGISTRATION_CLOSED_MESSAGE},
+        )
+
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -56,10 +79,10 @@ async def request_logging_middleware(request: Request, call_next):
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"] if CORS_ALLOW_ALL_ORIGINS else CORS_ALLOWED_ORIGINS,
+    allow_credentials=not CORS_ALLOW_ALL_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin"],
 )
 
 app.add_middleware(
