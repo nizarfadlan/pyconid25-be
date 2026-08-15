@@ -14,8 +14,10 @@ from core.rate_limiter.middleware import RateLimitMiddleware
 
 from settings import (
     CORS_ALLOW_ALL_ORIGINS,
+    RATE_LIMIT_CLEANUP_INTERVAL,
     RATE_LIMIT_ENABLED,
     RATE_LIMIT_EXCLUDED_PATHS,
+    RATE_LIMIT_MAX_KEYS,
     RATE_LIMIT_PER_MINUTE,
     RATE_LIMIT_WINDOW,
     CORS_ALLOWED_ORIGINS,
@@ -88,6 +90,10 @@ app.add_middleware(
 app.add_middleware(
     RateLimitMiddleware,
     backend=InMemoryRateLimiter,
+    backend_kwargs={
+        "max_keys": RATE_LIMIT_MAX_KEYS,
+        "cleanup_interval": RATE_LIMIT_CLEANUP_INTERVAL,
+    },
     enabled=RATE_LIMIT_ENABLED,
     limit=RATE_LIMIT_PER_MINUTE,
     window=RATE_LIMIT_WINDOW,
