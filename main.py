@@ -140,9 +140,9 @@ app.include_router(user_router)
 
 @app.exception_handler(ValidationError)
 async def pydantic_validation_exception_handler(request: Request, exc: ValidationError):
-    # Logikanya hampir sama, hanya cara mengambil detail errornya sedikit berbeda
+    # The logic is similar, but the error details have a slightly different structure.
     error_details = []
-    # exc.errors() dari pydantic.ValidationError sedikit berbeda strukturnya
+    # exc.errors() has a slightly different structure for pydantic.ValidationError.
     for error in exc.errors():
         field = error["loc"][0] if error["loc"] else "general"
         message = error["msg"]
@@ -151,7 +151,7 @@ async def pydantic_validation_exception_handler(request: Request, exc: Validatio
     return JSONResponse(
         status_code=422,
         content={
-            "message": "Terjadi kesalahan validasi pada data form (Pydantic validation).",
+            "message": "A validation error occurred in the form data (Pydantic validation).",
             "errors": error_details,
         },
     )

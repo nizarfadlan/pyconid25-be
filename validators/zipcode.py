@@ -20,10 +20,10 @@ class ZipCodeValidator:
         self, zip_code: str, country_code: str
     ) -> Tuple[bool, Optional[str]]:
         """
-        Validate zip code untuk country tertentu
+        Validate a zip code for a specific country
 
         Args:
-            zip_code: Postal/zip code yang akan divalidasi
+            zip_code: Postal/zip code to validate
             country_code: ISO2 country code (e.g., 'ID', 'US', 'GB')
 
         Returns:

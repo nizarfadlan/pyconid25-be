@@ -340,7 +340,7 @@ async def email_verified(
     db: Session = Depends(get_db_sync),
 ):
     if not token:
-        return common_response(BadRequest(message="Token tidak ditemukan"))
+        return common_response(BadRequest(message="Token not found"))
 
     email_verification = (
         emailVerificationRepo.get_email_verification_by_verfication_code(
@@ -348,17 +348,17 @@ async def email_verified(
         )
     )
     if not email_verification:
-        return common_response(BadRequest(message="token tidak valid"))
+        return common_response(BadRequest(message="Invalid token"))
 
     if email_verification.expired_at < datetime.now().astimezone(timezone(TZ)):
         emailVerificationRepo.delete_email_verification(
             db=db, email_verification=email_verification
         )
-        return common_response(BadRequest(message="Token expired, mohon daftar ulang"))
+        return common_response(BadRequest(message="Token expired. Please register again."))
 
     existing_user = userRepo.get_user_by_email(db=db, email=email_verification.email)
     if existing_user:
-        return common_response(BadRequest(message="Email sudah terdaftar"))
+        return common_response(BadRequest(message="Email already registered"))
 
     now = datetime.now().astimezone(timezone(TZ))
     userRepo.create_user(
@@ -462,7 +462,7 @@ async def forgot_password(
 
     user = userRepo.get_user_by_email(db=db, email=request.email)
     if user is None:
-        return common_response(Ok(data={"message": "silahkan cek email anda"}))
+        return common_response(Ok(data={"message": "Please check your email"}))
 
     token = resetPasswordRepo.generate_token()
     expired_at = datetime.now().astimezone(timezone(TZ)) + timedelta(hours=12)
@@ -489,7 +489,7 @@ async def forgot_password(
     reset_link = f"{FRONTEND_BASE_URL}/reset-password/?token={token}"
     await send_reset_password_email(recipient=request.email, reset_link=reset_link)
     db.commit()
-    return common_response(Ok(data={"message": "silahkan cek email anda"}))
+    return common_response(Ok(data={"message": "Please check your email"}))
 
 
 @router.post(
@@ -507,7 +507,7 @@ async def reset_password(
         db=db, token=request.token
     )
     if not reset_password:
-        return common_response(BadRequest(message="token tidak valid"))
+        return common_response(BadRequest(message="Invalid token"))
 
     if reset_password.expired_at < datetime.now().astimezone(timezone(TZ)):
         resetPasswordRepo.delete_reset_password(db=db, reset_password=reset_password)
@@ -515,7 +515,7 @@ async def reset_password(
 
     user: User = reset_password.user
     if not user:
-        return common_response(BadRequest(message="User tidak ditemukan"))
+        return common_response(BadRequest(message="User not found"))
 
     user.password = generate_hash_password(request.new_password)
     user.updated_at = datetime.now().astimezone(timezone(TZ))
@@ -525,7 +525,7 @@ async def reset_password(
         db=db, reset_password=reset_password, is_commit=False
     )
     invalidate_user_tokens(db=db, user_id=user.id)
-    return common_response(Ok(data={"message": "Password berhasil diubah"}))
+    return common_response(Ok(data={"message": "Password changed successfully"}))
 
 
 @router.post(

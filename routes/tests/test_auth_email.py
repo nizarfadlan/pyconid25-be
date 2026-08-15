@@ -56,7 +56,7 @@ class TestAuthEmail(IsolatedAsyncioTestCase):
         verification_response = client.get("/auth/email/verified/")
         self.assertEqual(verification_response.status_code, 400)
         self.assertEqual(
-            verification_response.json()["message"], "Token tidak ditemukan"
+            verification_response.json()["message"], "Token not found"
         )
 
     @patch("routes.auth.send_email_verfication", new_callable=AsyncMock)

@@ -76,14 +76,14 @@ class BaseOAuthService(ABC):
     def _update_user_provider_info(
         self, user: User, user_info: UserInfoResponse
     ) -> User:
-        """Update user dengan provider-specific fields"""
+        """Update user with provider-specific fields."""
         pass
 
     @abstractmethod
     def _set_user_provider_fields(
         self, user_data: dict, user_info: UserInfoResponse, provider_id: str
     ) -> dict:
-        """Set provider-specific fields untuk user baru"""
+        """Set provider-specific fields for a new user."""
         pass
 
     def _create_oauth_state(
