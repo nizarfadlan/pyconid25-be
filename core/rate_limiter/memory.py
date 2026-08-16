@@ -63,9 +63,7 @@ class InMemoryRateLimiter:
             cutoff_time = current_time - window
             self._maybe_cleanup(current_time, window)
 
-            timestamps = [
-                ts for ts in self._requests.get(key, []) if ts > cutoff_time
-            ]
+            timestamps = [ts for ts in self._requests.get(key, []) if ts > cutoff_time]
             if timestamps:
                 self._requests[key] = timestamps
             else:

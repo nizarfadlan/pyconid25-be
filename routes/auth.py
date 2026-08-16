@@ -354,7 +354,9 @@ async def email_verified(
         emailVerificationRepo.delete_email_verification(
             db=db, email_verification=email_verification
         )
-        return common_response(BadRequest(message="Token expired. Please register again."))
+        return common_response(
+            BadRequest(message="Token expired. Please register again.")
+        )
 
     existing_user = userRepo.get_user_by_email(db=db, email=email_verification.email)
     if existing_user:

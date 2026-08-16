@@ -168,7 +168,10 @@ class TestUserProfile(IsolatedAsyncioTestCase):
         client = TestClient(app)
         response = client.post(
             "/auth/email/signin/",
-            json={"email": "testuser-profile-picture@local.com", "password": "password"},
+            json={
+                "email": "testuser-profile-picture@local.com",
+                "password": "password",
+            },
         )
         token = response.json().get("token", None)
 
@@ -522,7 +525,10 @@ class TestUserProfile(IsolatedAsyncioTestCase):
         client = TestClient(app)
         response = client.post(
             "/auth/email/signin/",
-            json={"email": "testuser-profile-existing-picture@local.com", "password": "password"},
+            json={
+                "email": "testuser-profile-existing-picture@local.com",
+                "password": "password",
+            },
         )
         token = response.json().get("token", None)
 

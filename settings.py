@@ -87,9 +87,7 @@ RATE_LIMIT_ENABLED = str_to_bool(os.environ.get("RATE_LIMIT_ENABLED", "False"))
 RATE_LIMIT_PER_MINUTE = int(os.environ.get("RATE_LIMIT_PER_MINUTE", "20"))
 RATE_LIMIT_WINDOW = int(os.environ.get("RATE_LIMIT_WINDOW", "60"))
 RATE_LIMIT_MAX_KEYS = int(os.environ.get("RATE_LIMIT_MAX_KEYS", "10000"))
-RATE_LIMIT_CLEANUP_INTERVAL = int(
-    os.environ.get("RATE_LIMIT_CLEANUP_INTERVAL", "60")
-)
+RATE_LIMIT_CLEANUP_INTERVAL = int(os.environ.get("RATE_LIMIT_CLEANUP_INTERVAL", "60"))
 RATE_LIMIT_EXCLUDED_PATHS = os.environ.get(
     "RATE_LIMIT_EXCLUDED_PATHS", "/docs,/openapi.json"
 ).split(",")

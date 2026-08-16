@@ -197,9 +197,7 @@ def invalidate_token(db: SQLAlchemySession, token: str):
     ).scalar_one_or_none()
 
     if token_row is not None:
-        db.execute(
-            delete(RefreshToken).where(RefreshToken.token_id == token_row.id)
-        )
+        db.execute(delete(RefreshToken).where(RefreshToken.token_id == token_row.id))
         db.delete(token_row)
 
     db.execute(delete(Token).where(Token.expired_at <= now))
